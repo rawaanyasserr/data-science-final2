@@ -15,8 +15,8 @@ st.title("NYC Taxi Fare Prediction & Data Insights")
 model_path = os.path.join(os.path.dirname(__file__), 'best_gradient_boosting_model.pkl')
 preprocessor_path = os.path.join(os.path.dirname(__file__), 'preprocessor.pkl')
 
-model = joblib.load(model_path)
-preprocessor = joblib.load(preprocessor_path)
+model = joblib.load(best_model.pkl)
+preprocessor = joblib.load(preprocessor.pkl)
 
 # === Load dataset ===
 import requests
