@@ -9,3 +9,4 @@ scipy
 altair
 plotly
 pyarrow
+statsmodels
