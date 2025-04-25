@@ -4,19 +4,21 @@ import numpy as np
 import joblib
 import matplotlib.pyplot as plt
 import plotly.express as px
+import os
 
 # Set page config
 st.set_page_config(layout="wide")
 st.title("NYC Taxi Fare Prediction & Data Insights")
 
 # === Load model and preprocessor ===
-model_path = "/Users/rue/Desktop/Rawan_Yasser_202201681_Data_Science/best_gradient_boosting_model.pkl"
-preprocessor_path = "/Users/rue/Desktop/Rawan_Yasser_202201681_Data_Science/preprocessor.pkl"
+# Use relative paths to load the model and preprocessor
+model_path = os.path.join(os.path.dirname(__file__), 'best_gradient_boosting_model.pkl')
+preprocessor_path = os.path.join(os.path.dirname(__file__), 'preprocessor.pkl')
+
 model = joblib.load(model_path)
 preprocessor = joblib.load(preprocessor_path)
 
 # === Load dataset ===
-import os
 import requests
 import gzip
 import shutil
