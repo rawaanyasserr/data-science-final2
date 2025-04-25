@@ -1,4 +1,10 @@
+# ===== EVENT LOOP FIX (MUST BE AT VERY TOP) =====
 import asyncio
+import nest_asyncio
+nest_asyncio.apply()  # Patch the event loop
+asyncio.set_event_loop(asyncio.new_event_loop())
+
+# ===== IMPORTS =====
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -10,137 +16,102 @@ import requests
 import gzip
 import shutil
 
-# ===== FIX EVENT LOOP ISSUE =====
-def fix_event_loop():
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        asyncio.set_event_loop(asyncio.new_event_loop())
-
-fix_event_loop()
-
-# ===== SETUP =====
+# ===== STREAMLIT CONFIG =====
 st.set_page_config(layout="wide")
+st.set_option('server.enableCORS', False)  # Disable CORS for health checks
 st.title("NYC Taxi Fare Prediction & Data Insights")
 
-# ===== MODEL LOADING =====
+# ===== MODEL LOADING (WITH CACHING) =====
 @st.cache_resource
-def load_model_artifacts():
+def load_models():
     try:
-        # Use relative paths
-        model_path = os.path.join(os.path.dirname(__file__), 'best_gradient_boosting_model.pkl')
-        preprocessor_path = os.path.join(os.path.dirname(__file__), 'preprocessor.pkl')
-        
-        model = joblib.load(model_path)
-        preprocessor = joblib.load(preprocessor_path)
+        model = joblib.load('best_gradient_boosting_model.pkl')
+        preprocessor = joblib.load('preprocessor.pkl')
         return model, preprocessor
     except Exception as e:
-        st.error(f"Error loading model: {str(e)}")
+        st.error(f"Model loading failed: {str(e)}")
         st.stop()
 
-model, preprocessor = load_model_artifacts()
+model, preprocessor = load_models()
 
 # ===== DATA LOADING =====
 @st.cache_data
-def load_data():
+def load_dataset():
     local_path = "fixed_nyc_taxi_sample_2M.csv.gz"
-    one_drive_url = "https://onedrive.live.com/download?resid=D8331802E3D7620B%21254&authkey=!AFmF9wiQ4d1E1hM"
-
     if not os.path.exists(local_path):
-        st.info("📥 Downloading dataset from OneDrive...")
-        try:
+        with st.spinner("Downloading dataset..."):
+            one_drive_url = "https://onedrive.live.com/download?resid=D8331802E3D7620B%21254&authkey=!AFmF9wiQ4d1E1hM"
             with requests.get(one_drive_url, stream=True) as r:
                 with open(local_path, 'wb') as f:
                     shutil.copyfileobj(r.raw, f)
-            st.success("✅ Download complete.")
-        except Exception as e:
-            st.error(f"Download failed: {str(e)}")
-            return None
+    
+    cols = ['tpep_pickup_datetime', 'tpep_dropoff_datetime', 
+            'trip_distance', 'fare_amount', 'tip_amount']
+    df = pd.read_csv(local_path, compression='gzip', usecols=cols,
+                    parse_dates=['tpep_pickup_datetime', 'tpep_dropoff_datetime'])
+    
+    # Feature engineering
+    df['pickup_hour'] = df['tpep_pickup_datetime'].dt.hour
+    df['pickup_day'] = df['tpep_pickup_datetime'].dt.dayofweek
+    df['trip_duration'] = (df['tpep_dropoff_datetime'] - df['tpep_pickup_datetime']).dt.total_seconds() / 60
+    
+    return df.dropna()
 
-    columns_needed = ['tpep_pickup_datetime', 'tpep_dropoff_datetime', 
-                     'trip_distance', 'fare_amount', 'tip_amount']
-    try:
-        df = pd.read_csv(local_path, compression='gzip', 
-                        usecols=columns_needed,
-                        parse_dates=['tpep_pickup_datetime', 'tpep_dropoff_datetime'])
-        
-        # Feature engineering
-        df['pickup_hour'] = df['tpep_pickup_datetime'].dt.hour
-        df['pickup_day'] = df['tpep_pickup_datetime'].dt.dayofweek
-        df['trip_duration'] = (df['tpep_dropoff_datetime'] - df['tpep_pickup_datetime']).dt.total_seconds() / 60
-        
-        return df.dropna()
-    except Exception as e:
-        st.error(f"Data loading failed: {str(e)}")
-        return None
-
-df = load_data()
-if df is None:
-    st.stop()
+df = load_dataset()
 
 # ===== SIDEBAR PREDICTION =====
 st.sidebar.header("📈 Predict Taxi Fare")
-
 with st.sidebar.form("prediction_form"):
-    trip_distance = st.number_input("Trip Distance (miles)", min_value=0.0, value=2.0, step=0.1)
-    pickup_hour = st.selectbox("Pickup Hour", list(range(24)), index=12)
-    pickup_day = st.selectbox("Pickup Day (0=Monday, 6=Sunday)", list(range(7)), index=0)
-    passenger_count = st.number_input("Passenger Count", min_value=1, max_value=6, value=1)
+    trip_distance = st.number_input("Trip Distance (miles)", 0.1, 30.0, 2.0, 0.1)
+    pickup_hour = st.selectbox("Pickup Hour", range(24), index=12)
+    pickup_day = st.selectbox("Pickup Day (0=Monday)", range(7), index=0)
+    passenger_count = st.number_input("Passenger Count", 1, 6, 1)
     
-    submitted = st.form_submit_button("Predict Fare")
-    
-    if submitted:
+    if st.form_submit_button("Predict"):
+        input_data = pd.DataFrame([[
+            trip_distance, pickup_hour, pickup_day, passenger_count
+        ]], columns=['trip_distance', 'pickup_hour', 'pickup_day', 'passenger_count'])
+        
         try:
-            input_df = pd.DataFrame({
-                'trip_distance': [trip_distance],
-                'pickup_hour': [pickup_hour],
-                'pickup_day': [pickup_day],
-                'passenger_count': [passenger_count]
-            })
-            
-            scaled_input = preprocessor.transform(input_df)
-            prediction = model.predict(scaled_input)[0]
-            st.sidebar.success(f"💰 Predicted Fare: ${prediction:.2f}")
+            features = preprocessor.transform(input_data)
+            fare = model.predict(features)[0]
+            st.sidebar.success(f"Predicted Fare: ${fare:.2f}")
         except Exception as e:
             st.sidebar.error(f"Prediction failed: {str(e)}")
 
-# ===== MAIN VISUALIZATIONS =====
-st.subheader("🔍 Data Insights & Visualizations")
+# ===== VISUALIZATIONS =====
+st.subheader("🔍 Data Insights")
 
-# Data cleaning
+# Clean data
 clean_df = df[
-    (df['trip_distance'] > 0) &
-    (df['trip_duration'] > 0) &
+    (df['trip_distance'] > 0) & 
+    (df['trip_duration'] > 0) & 
     (df['fare_amount'] > 0)
 ].copy()
 
-# --- Visualization 1 ---
-st.markdown("### 1. Trip Distance vs Duration by Hour")
-corr = clean_df['trip_distance'].corr(clean_df['trip_duration'])
+# Plot 1: Distance vs Duration
+st.markdown("### Trip Duration Patterns")
 fig1 = px.scatter(
-    clean_df.sample(n=10000, random_state=42),  # Sample for performance
+    clean_df.sample(10000, random_state=42),
     x='trip_distance',
     y='trip_duration',
     color='pickup_hour',
     trendline="lowess",
-    title=f"Duration vs Distance | Hourly Patterns (Corr: {corr:.2f})",
     labels={'trip_distance': 'Distance (miles)', 'trip_duration': 'Duration (mins)'}
 )
 st.plotly_chart(fig1, use_container_width=True)
 
-# --- Visualization 2 ---
-st.markdown("### 2. Average Fare and Tip by Trip Distance")
+# Plot 2: Fare by Distance
+st.markdown("### Fare Distribution")
 clean_df['distance_bin'] = pd.cut(clean_df['trip_distance'], 
-                                bins=[0, 1, 3, 5, 10, 20], 
+                                bins=[0, 1, 3, 5, 10, 20],
                                 labels=['0-1', '1-3', '3-5', '5-10', '10-20'])
-grouped = clean_df.groupby('distance_bin')[['fare_amount', 'tip_amount']].mean().reset_index()
 
-fig2, ax2 = plt.subplots(figsize=(10, 5))
-grouped.plot(x='distance_bin', kind='bar', colormap='Set2', ax=ax2)
-ax2.set_title('Average Fare and Tip Amount by Trip Distance')
-ax2.set_xlabel('Trip Distance (miles)')
-ax2.set_ylabel('Average Amount ($)')
-ax2.grid(axis='y', linestyle='--', alpha=0.7)
+fig2, ax = plt.subplots(figsize=(10,5))
+clean_df.groupby('distance_bin')['fare_amount'].mean().plot.bar(ax=ax, color='skyblue')
+ax.set_title("Average Fare by Distance")
+ax.set_xlabel("Distance Bin (miles)")
+ax.set_ylabel("Average Fare ($)")
 st.pyplot(fig2)
 
-st.success("✅ App loaded successfully!")
+st.success("App running successfully!")
